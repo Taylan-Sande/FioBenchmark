@@ -12,19 +12,42 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for package in ("bench_fio", "fio_plot"):
-    package_datas, package_binaries, package_hidden = collect_all(package)
-    datas += package_datas
-    binaries += package_binaries
-    hiddenimports += package_hidden
+
+def collect_package(package_name):
+    package_datas, package_binaries, package_hidden = collect_all(package_name)
+    datas.extend(package_datas)
+    binaries.extend(package_binaries)
+    hiddenimports.extend(package_hidden)
+
+
+collect_package("bench_fio")
+collect_package("fio_plot")
+collect_package("PIL")
+
+hiddenimports += [
+    "tkinter",
+    "tkinter.ttk",
+    "tkinter.filedialog",
+    "tkinter.messagebox",
+    "_tkinter",
+    "PIL.Image",
+    "PIL.PngImagePlugin",
+    "matplotlib.backends.backend_agg",
+    "mpl_toolkits.mplot3d",
+    "numpy",
+    "pyparsing",
+    "rich",
+]
 
 datas += copy_metadata("fio-plot")
+datas += copy_metadata("Pillow")
 datas.append((str(project_root / "THIRD_PARTY_NOTICES.md"), "."))
 
 if sys.platform.startswith("win"):
     fio_vendor = project_root / "vendor" / "fio" / "windows"
-    if fio_vendor.exists():
-        datas.append((str(fio_vendor), "tools/fio"))
+    if not fio_vendor.exists():
+        raise RuntimeError("vendor/fio/windows não existe durante o build.")
+    datas.append((str(fio_vendor), "tools/fio"))
 
 a = Analysis(
     [str(project_root / "app.py")],
@@ -33,7 +56,11 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={
+        "matplotlib": {
+            "backends": ["Agg"],
+        },
+    },
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
@@ -50,7 +77,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
 )
 
@@ -59,7 +86,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="FioBenchmark",
 )

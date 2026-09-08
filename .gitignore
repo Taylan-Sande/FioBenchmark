@@ -5,11 +5,13 @@ __pycache__/
 *.pyo
 
 build/_fio_windows/
+build/_installed_test/
 build/fio-src/
 build/AppDir/
 build/linuxdeploy-*.AppImage
 build/appimagetool-*.AppImage
 build/runtime-*
+build/*selftest.txt
 
 dist/
 release/
@@ -22,7 +24,5 @@ resultados/
 
 .idea/
 .vscode/
-
 .DS_Store
 Thumbs.db
-

@@ -1,10 +1,14 @@
+import base64
+import io
 import os
+import sys
 import threading
+import traceback
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image
 
 from benchmark_runner import (
     BenchmarkError,
@@ -73,6 +77,31 @@ class App(tk.Tk):
         self._build_ui()
         self._update_graph_fields()
         self._update_readmix_state()
+
+    def report_callback_exception(self, exc, value, tb):
+        details = "".join(traceback.format_exception(exc, value, tb))
+        log_dir = Path.home() / "FioBenchmark"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "erro_interface.log"
+
+        try:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write("\n" + "=" * 80 + "\n")
+                log.write(details)
+        except OSError:
+            pass
+
+        try:
+            messagebox.showerror(
+                "Erro na interface",
+                (
+                    "Ocorreu um erro na interface.\n\n"
+                    f"Detalhes foram gravados em:\n{log_path}\n\n"
+                    f"{value}"
+                ),
+            )
+        except Exception:
+            pass
 
     def _configure_style(self):
         style = ttk.Style(self)
@@ -624,20 +653,36 @@ class App(tk.Tk):
         messagebox.showerror("Erro", message)
 
     def _show_image(self, path):
-        with Image.open(path) as image:
-            self.result_source_image = image.copy()
+        try:
+            with Image.open(path) as image:
+                self.result_source_image = image.convert("RGBA").copy()
 
-        self.image_label.configure(text="")
-        self.after_idle(self._render_result_image)
+            self.image_label.configure(text="")
+            self.update_idletasks()
+            self.after(50, self._render_result_image)
+        except Exception as exc:
+            self.result_source_image = None
+            self.image_label.configure(
+                image="",
+                text=(
+                    "O gráfico foi gerado, mas não pôde ser exibido aqui.\n\n"
+                    f"Arquivo: {path}\n\n"
+                    f"Erro: {exc}"
+                ),
+            )
+            raise
 
     def _on_image_area_resize(self, event=None):
         if self.result_source_image is None:
             return
 
         if self.resize_after_id is not None:
-            self.after_cancel(self.resize_after_id)
+            try:
+                self.after_cancel(self.resize_after_id)
+            except tk.TclError:
+                pass
 
-        self.resize_after_id = self.after(100, self._render_result_image)
+        self.resize_after_id = self.after(120, self._render_result_image)
 
     def _render_result_image(self):
         self.resize_after_id = None
@@ -649,6 +694,7 @@ class App(tk.Tk):
         height = self.image_label.winfo_height()
 
         if width <= 10 or height <= 10:
+            self.resize_after_id = self.after(120, self._render_result_image)
             return
 
         margin = 12
@@ -670,8 +716,12 @@ class App(tk.Tk):
             Image.Resampling.LANCZOS,
         )
 
-        self.result_image = ImageTk.PhotoImage(resized)
-        self.image_label.configure(image=self.result_image)
+        buffer = io.BytesIO()
+        resized.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        self.result_image = tk.PhotoImage(data=encoded)
+        self.image_label.configure(image=self.result_image, text="")
 
     def _exit_fullscreen(self, event=None):
         self.attributes("-fullscreen", False)
@@ -703,6 +753,21 @@ class App(tk.Tk):
 
 
 def main():
+    if "--self-test" in sys.argv:
+        from runtime_selftest import run_self_test
+
+        try:
+            index = sys.argv.index("--self-test")
+            report_path = (
+                Path(sys.argv[index + 1])
+                if len(sys.argv) > index + 1
+                else Path.home() / "FioBenchmark" / "selftest.txt"
+            )
+        except (ValueError, IndexError):
+            report_path = Path.home() / "FioBenchmark" / "selftest.txt"
+
+        raise SystemExit(run_self_test(report_path))
+
     app = App()
     app.mainloop()
 

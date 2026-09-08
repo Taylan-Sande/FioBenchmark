@@ -1,5 +1,5 @@
 #define MyAppName "FIO Benchmark"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "FIO Benchmark"
 #define MyAppExeName "FioBenchmark.exe"
 
@@ -20,6 +20,8 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupLogging=yes
+CloseApplications=yes
 
 [Files]
 Source: "..\dist\FioBenchmark\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

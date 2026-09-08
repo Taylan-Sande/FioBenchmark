@@ -21,7 +21,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Build Windows
+      - name: Build and test Windows installer
         shell: powershell
         run: .\build\build_windows.ps1
 
@@ -29,7 +29,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FioBenchmark-Windows
-          path: release/FioBenchmark-Setup-Windows-x64.exe
+          path: |
+            release/FioBenchmark-Setup-Windows-x64.exe
+            build/windows-selftest.txt
+            build/windows-installed-selftest.txt
           if-no-files-found: error
 
   linux:
@@ -54,14 +57,19 @@ jobs:
             libgtk-3-0 \
             zlib1g-dev \
             libjpeg-dev \
-            patchelf
+            patchelf \
+            xvfb \
+            xauth
 
-      - name: Build Linux
+      - name: Build and test Linux AppImage
         run: ./build/build_linux.sh
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
           name: FioBenchmark-Linux
-          path: release/FioBenchmark-Linux-x86_64.AppImage
+          path: |
+            release/FioBenchmark-Linux-x86_64.AppImage
+            build/linux-selftest.txt
+            build/linux-appimage-selftest.txt
           if-no-files-found: error
