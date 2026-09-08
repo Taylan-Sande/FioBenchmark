@@ -320,9 +320,12 @@ class App(tk.Tk):
         self.numjobs_list_var = tk.StringVar(value="1 2 4 8")
         self.log_metric_var = tk.StringVar(value="IOPS e Latência")
         self.log_interval_var = tk.StringVar(value="1000")
+        self.generate_all_var = tk.BooleanVar(value=False)
 
         self.status_var = tk.StringVar(value="Pronto.")
         self.result_path_var = tk.StringVar(value="")
+        self.progress_max = 1
+        self.progress_value = 0
 
     def _build_ui(self):
         main = ttk.Frame(self, padding=16)
@@ -393,14 +396,22 @@ class App(tk.Tk):
         frame = ttk.LabelFrame(parent, text="1. Gráfico", padding=12)
         frame.pack(fill="x", pady=(0, 10))
 
-        combo = ttk.Combobox(
+        self.graph_combo = ttk.Combobox(
             frame,
             textvariable=self.graph_var,
             values=GRAPHS,
             state="readonly",
         )
-        combo.pack(fill="x")
-        combo.bind("<<ComboboxSelected>>", self._update_graph_fields)
+        self.graph_combo.pack(fill="x")
+        self.graph_combo.bind("<<ComboboxSelected>>", self._update_graph_fields)
+
+        self.generate_all_check = ttk.Checkbutton(
+            frame,
+            text="Gerar todos os gráficos (com os mesmos dados do teste)",
+            variable=self.generate_all_var,
+            command=self._on_generate_all_toggled,
+        )
+        self.generate_all_check.pack(anchor="w", pady=(8, 0))
 
         self.graph_description = ttk.Label(
             frame,
@@ -583,8 +594,24 @@ class App(tk.Tk):
         )
         self.run_button.pack(side="left")
 
-        self.progress = ttk.Progressbar(frame, mode="indeterminate", length=180)
-        self.progress.pack(side="right")
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(side="right", fill="x", expand=True, padx=(12, 0))
+
+        self.progress = ttk.Progressbar(
+            progress_frame,
+            mode="determinate",
+            maximum=100,
+            value=0,
+            length=220,
+        )
+        self.progress.pack(side="top", fill="x")
+
+        self.progress_label_var = tk.StringVar(value="")
+        ttk.Label(
+            progress_frame,
+            textvariable=self.progress_label_var,
+            style="Hint.TLabel",
+        ).pack(side="top", anchor="e")
 
         ttk.Label(
             parent,
@@ -622,13 +649,47 @@ class App(tk.Tk):
         )
         self.open_folder_button.pack(anchor="w", pady=(8, 0))
 
+    def _on_generate_all_toggled(self):
+        generate_all = self.generate_all_var.get()
+        if generate_all:
+            self.graph_combo.configure(state="disabled")
+            self.graph_description.config(
+                text=(
+                    "Serão gerados todos os 5 tipos de gráfico a partir do "
+                    "mesmo teste. O benchmark roda com a lista completa de "
+                    "NumJobs e IODepths (necessário para os 3D). "
+                    "Os gráficos 2D/Line usam o primeiro NumJobs da lista."
+                )
+            )
+        else:
+            self.graph_combo.configure(state="readonly")
+        self._update_graph_fields()
+
     def _update_graph_fields(self, event=None):
         for widget in self.graph_options_frame.winfo_children():
             widget.destroy()
 
+        generate_all = self.generate_all_var.get()
         graph = self.graph_var.get()
-        self.graph_description.config(text=GRAPH_DESCRIPTIONS[graph])
-        fields = GRAPH_FIELDS[graph]
+
+        if generate_all:
+            # União dos campos necessários para todos os gráficos
+            fields = ("iodepths", "numjobs_list", "log_metric", "log_interval")
+            if not self.generate_all_var.get():
+                pass
+            # descrição já setada no toggle; reforça se veio do combo
+            self.graph_description.config(
+                text=(
+                    "Serão gerados todos os 5 tipos de gráfico a partir do "
+                    "mesmo teste. O benchmark roda com a lista completa de "
+                    "NumJobs e IODepths (necessário para os 3D). "
+                    "Os gráficos 2D/Line usam o primeiro NumJobs da lista."
+                )
+            )
+        else:
+            self.graph_description.config(text=GRAPH_DESCRIPTIONS[graph])
+            fields = GRAPH_FIELDS[graph]
+
         row = 0
 
         if "iodepths" in fields:
@@ -664,15 +725,20 @@ class App(tk.Tk):
         if "numjobs_list" in fields:
             ttk.Label(
                 self.graph_options_frame,
-                text="NumJobs:",
+                text="NumJobs:" if generate_all else "NumJobs:",
             ).grid(row=row, column=0, sticky="w")
             ttk.Entry(
                 self.graph_options_frame,
                 textvariable=self.numjobs_list_var,
             ).grid(row=row + 1, column=0, sticky="ew", pady=(3, 0))
+            hint = (
+                "Lista completa (3D usa todos; 2D/Line usam o 1º). Ex.: 1 2 4 8"
+                if generate_all
+                else "Valores separados por espaço. Ex.: 1 2 4 8"
+            )
             ttk.Label(
                 self.graph_options_frame,
-                text="Valores separados por espaço. Ex.: 1 2 4 8",
+                text=hint,
                 style="Hint.TLabel",
             ).grid(row=row + 2, column=0, sticky="w", pady=(2, 8))
             row += 3
@@ -795,20 +861,28 @@ class App(tk.Tk):
         )
         iodepths = self._int_list(self.iodepths_var.get(), "IODepth")
 
-        fields = GRAPH_FIELDS[graph]
+        generate_all = bool(self.generate_all_var.get())
 
-        if "numjobs_list" in fields:
+        if generate_all:
+            # Lista completa para os 3D; 2D/Line usam o primeiro valor no plot
             numjobs = self._int_list(self.numjobs_list_var.get(), "NumJobs")
-        else:
-            numjobs = [
-                self._positive_int(self.numjobs_fixed_var.get(), "NumJobs")
-            ]
-
-        log_interval = 1000
-        if "log_interval" in fields:
             log_interval = self._positive_int(
                 self.log_interval_var.get(), "Intervalo do LOG"
             )
+        else:
+            fields = GRAPH_FIELDS[graph]
+            if "numjobs_list" in fields:
+                numjobs = self._int_list(self.numjobs_list_var.get(), "NumJobs")
+            else:
+                numjobs = [
+                    self._positive_int(self.numjobs_fixed_var.get(), "NumJobs")
+                ]
+
+            log_interval = 1000
+            if "log_interval" in fields:
+                log_interval = self._positive_int(
+                    self.log_interval_var.get(), "Intervalo do LOG"
+                )
 
         readmix = None
         if self.mode_var.get() == "randrw":
@@ -822,6 +896,7 @@ class App(tk.Tk):
 
         return {
             "graph": graph,
+            "generate_all": generate_all,
             "target_root": str(target),
             "results_root": str(results_root.resolve()),
             "size_mb": size_mb,
@@ -836,6 +911,16 @@ class App(tk.Tk):
             "log_metric": self.log_metric_var.get(),
             "log_interval": log_interval,
         }
+
+    def _set_progress(self, step, total, message):
+        """Atualiza barra e status (sempre chamar via self.after a partir de threads)."""
+        total = max(1, int(total))
+        step = max(0, min(int(step), total))
+        percent = int((step / total) * 100)
+        self.progress.configure(mode="determinate", maximum=100, value=percent)
+        self.progress_label_var.set(f"{percent}%")
+        if message:
+            self.status_var.set(message)
 
     def _start(self):
         if self.running:
@@ -862,11 +947,19 @@ class App(tk.Tk):
             if not answer:
                 return
 
+        # 1 passo = benchmark + N passos de gráfico
+        num_graphs = len(GRAPHS) if config.get("generate_all") else 1
+        self.progress_max = 1 + num_graphs
+        self.progress_value = 0
+
         self.running = True
         self.run_button.configure(state="disabled")
         self.open_folder_button.configure(state="disabled")
-        self.progress.start(10)
-        self.status_var.set("Executando o benchmark. Não feche a aplicação.")
+        self._set_progress(
+            0,
+            self.progress_max,
+            "Iniciando… Executando o benchmark. Não feche a aplicação.",
+        )
 
         thread = threading.Thread(
             target=self._worker,
@@ -877,24 +970,49 @@ class App(tk.Tk):
 
     def _worker(self, config):
         try:
+            total = self.progress_max
+
+            self.after(
+                0,
+                lambda: self._set_progress(
+                    0,
+                    total,
+                    "Executando o benchmark. Não feche a aplicação.",
+                ),
+            )
+
             benchmark = BenchmarkRunner(config)
             benchmark_result = benchmark.run()
 
             self.after(
                 0,
-                lambda: self.status_var.set(
-                    "Benchmark concluído. Gerando o gráfico com fio-plot..."
+                lambda: self._set_progress(
+                    1,
+                    total,
+                    "Benchmark concluído. Gerando gráfico(s) com fio-plot…",
                 ),
             )
 
+            def plot_progress(step, graph_total, message):
+                # step 1..N dos gráficos → progresso global = 1 + step
+                self.after(
+                    0,
+                    lambda s=step, m=message: self._set_progress(
+                        1 + s, total, m
+                    ),
+                )
+
             plotter = PlotRunner(config, benchmark_result)
-            result = plotter.run()
-            # Compatível com versão antiga (Path único) e nova (lista de Paths)
+            result = plotter.run(progress_callback=plot_progress)
             if isinstance(result, (list, tuple)):
                 png_paths = list(result)
             else:
                 png_paths = [result]
 
+            self.after(
+                0,
+                lambda: self._set_progress(total, total, "Concluído."),
+            )
             self.after(0, self._finish_success, png_paths)
         except (BenchmarkError, PlotError, OSError) as exc:
             message = str(exc)
@@ -905,34 +1023,39 @@ class App(tk.Tk):
 
     def _finish_success(self, png_paths):
         self.running = False
-        self.progress.stop()
         self.run_button.configure(state="normal")
         self.status_var.set("Concluído.")
+        self.progress_label_var.set("100%")
+        self.progress.configure(value=100)
 
         primary = Path(png_paths[0]) if png_paths else None
         if primary is not None:
             if len(png_paths) == 1:
                 self.result_path_var.set(f"Gráfico: {primary}")
+                msg = "O benchmark terminou e o gráfico foi gerado."
             else:
                 self.result_path_var.set(
                     f"{len(png_paths)} gráficos em: {primary.parent}"
+                )
+                msg = (
+                    f"O benchmark terminou e {len(png_paths)} gráficos "
+                    f"foram gerados.\n\nPasta:\n{primary.parent}"
                 )
             self.open_folder_button.configure(state="normal")
             self._show_image(primary)
         else:
             self.result_path_var.set("")
             self.open_folder_button.configure(state="disabled")
+            msg = "O benchmark terminou."
 
-        messagebox.showinfo(
-            "Concluído",
-            "O benchmark terminou e o gráfico foi gerado.",
-        )
+        messagebox.showinfo("Concluído", msg)
 
     def _finish_error(self, message):
         self.running = False
-        self.progress.stop()
         self.run_button.configure(state="normal")
         self.status_var.set("Falha.")
+        self.progress_label_var.set("")
+        self.progress.configure(value=0)
         messagebox.showerror("Erro", message)
 
     def _show_image(self, path):

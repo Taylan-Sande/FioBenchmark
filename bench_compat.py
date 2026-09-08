@@ -107,8 +107,10 @@ def bench_fio_compatibility():
             settings,
             benchmark,
         )
+        output_dir_path = Path(output_directory)
+        output_dir_path.mkdir(parents=True, exist_ok=True)
 
-        output_file = Path(output_directory) / (
+        output_file = output_dir_path / (
             f"{benchmark['mode']}-"
             f"{benchmark['iodepth']}-"
             f"{benchmark['numjobs']}.json"
@@ -123,24 +125,57 @@ def bench_fio_compatibility():
         tmpjobfile = job_dir / f"{safe_name}-tmpjobfile.fio"
 
         # Valores que serão escritos dentro do arquivo .fio.
+        # directory=/filename= precisam de escape do ':' da unidade.
         fio_benchmark = dict(benchmark)
         fio_benchmark["target"] = _escape_fio_windows_path(
             benchmark["target"]
         )
 
-        fio_output_directory = _escape_fio_windows_path(output_directory)
+        # Prefixo dos .log SEM caminho absoluto problemático.
+        # Usamos só o basename; o FIO roda com cwd=output_directory,
+        # então os .log caem na mesma pasta do JSON (exigido pelo fio-plot).
+        log_prefix = (
+            f"{benchmark['mode']}-iodepth-{benchmark['iodepth']}"
+            f"-numjobs-{benchmark['numjobs']}"
+        )
 
         generatefio.generate_fio_job_file(
             settings,
             fio_benchmark,
-            fio_output_directory,
+            # caminho só para montar o job; reescrevemos os write_*_log abaixo
+            log_prefix,
             str(tmpjobfile),
         )
+
+        # Garante write_*_log com basename relativo (cwd = output_directory).
+        # O generatefio grava write_*_log=prefix/...; forçamos o valor final.
+        try:
+            job_text = tmpjobfile.read_text(encoding="utf-8", errors="replace")
+            lines = []
+            for line in job_text.splitlines():
+                lower = line.strip().lower()
+                if lower.startswith("write_bw_log"):
+                    lines.append(f"write_bw_log={log_prefix}")
+                elif lower.startswith("write_lat_log"):
+                    lines.append(f"write_lat_log={log_prefix}")
+                elif lower.startswith("write_iops_log"):
+                    lines.append(f"write_iops_log={log_prefix}")
+                else:
+                    lines.append(line)
+            # Garante que as três opções existam mesmo se o template mudar
+            joined = "\n".join(lines)
+            for key in ("write_bw_log", "write_lat_log", "write_iops_log"):
+                if f"{key}=" not in joined.lower():
+                    lines.append(f"{key}={log_prefix}")
+            tmpjobfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
         # Importante:
         # No Windows NÃO usamos --output=<arquivo>.
         # Capturamos o JSON pelo stdout e nós mesmos gravamos o arquivo
         # somente depois de confirmar que o conteúdo é JSON válido.
+        # cwd=output_directory faz os .log do FIO caírem junto do JSON.
         command = [
             "fio",
             "--output-format=json",
@@ -163,6 +198,7 @@ def bench_fio_compatibility():
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                cwd=str(output_dir_path),
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 

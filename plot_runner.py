@@ -108,13 +108,30 @@ class PlotRunner:
             return ["lat"]
         return ["iops", "lat"]
 
+    def _find_log_files(self, data_dir):
+        """Procura .log na pasta dos JSON e, se vazio, em todo o output_root."""
+        logs = list(Path(data_dir).glob("*.log"))
+        if logs:
+            return logs
+        root = Path(self.result.output_root)
+        return list(root.rglob("*.log"))
+
     def _validate_line_logs(self, data_dir):
-        logs = list(data_dir.glob("*.log"))
+        logs = self._find_log_files(data_dir)
         if not logs:
+            root = Path(self.result.output_root)
+            sample = sorted(
+                str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()
+            )[:40]
+            listing = "\n".join(sample) if sample else "(pasta vazia)"
             raise PlotError(
-                "O gráfico Line Chart precisa dos arquivos .log do FIO, "
-                "mas nenhum foi encontrado."
+                "O gráfico Line Chart precisa dos arquivos .log do FIO "
+                "(write_iops_log / write_lat_log), mas nenhum foi encontrado.\n\n"
+                f"Pasta procurada: {data_dir}\n"
+                f"Sessão: {root}\n\n"
+                f"Arquivos encontrados:\n{listing}"
             )
+        return logs
 
     def _numjobs_for_plot(self, graph):
         """Para gráficos 2D/Line usa o primeiro numjobs; para 3D usa a lista completa."""
@@ -174,10 +191,13 @@ class PlotRunner:
     def _run_one(self, data_dir, graph, output_png: Path):
         from fio_plot import main as fio_plot_main
 
+        plot_dir = Path(data_dir)
         if graph == self.GRAPH_LINE:
-            self._validate_line_logs(data_dir)
+            logs = self._validate_line_logs(data_dir)
+            # fio-plot -g lê os .log do diretório -i; usa a pasta onde estão
+            plot_dir = logs[0].parent
 
-        command = self._build_command(data_dir, output_png, graph)
+        command = self._build_command(plot_dir, output_png, graph)
 
         try:
             return_code, output = run_embedded_cli(
@@ -230,12 +250,10 @@ class PlotRunner:
 
         total = len(graphs)
         pngs = []
+        errors = []
 
         for idx, graph in enumerate(graphs, start=1):
             filename = self.GRAPH_FILENAMES.get(graph, "grafico.png")
-            if not generate_all:
-                # Mantém nome clássico quando é só um gráfico
-                filename = "grafico.png"
             output_png = self.result.output_root / filename
 
             if progress_callback:
@@ -245,7 +263,28 @@ class PlotRunner:
                     f"Gerando gráfico {idx}/{total}: {graph}",
                 )
 
-            png = self._run_one(data_dir, graph, output_png)
-            pngs.append(png)
+            try:
+                png = self._run_one(data_dir, graph, output_png)
+                pngs.append(png)
+            except PlotError as exc:
+                if generate_all:
+                    # Não aborta os demais gráficos se um falhar
+                    errors.append(f"{graph}: {exc}")
+                    continue
+                raise
+
+        if not pngs:
+            detail = "\n\n".join(errors) if errors else "Nenhum gráfico gerado."
+            raise PlotError(
+                "Nenhum gráfico pôde ser gerado.\n\n" + detail
+            )
+
+        if errors and generate_all:
+            # Anexa aviso em arquivo na sessão para o usuário ver
+            try:
+                warn = self.result.output_root / "avisos_graficos.txt"
+                warn.write_text("\n\n".join(errors), encoding="utf-8")
+            except OSError:
+                pass
 
         return pngs

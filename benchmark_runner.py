@@ -124,6 +124,25 @@ class BenchmarkRunner:
 
         return target
 
+    # Slugs curtos e estáveis para o nome da pasta de sessão
+    GRAPH_SLUGS = {
+        "2D — IOPS e Latência por IODepth": "2d_iops_lat",
+        "3D — IOPS × IODepth × NumJobs": "3d_iops",
+        "Line Chart — dados de LOG do FIO": "line_chart",
+        "2D agrupado — IOPS e Latência": "2d_agrupado",
+        "3D — Latência × IODepth × NumJobs": "3d_lat",
+    }
+
+    def _session_folder_name(self):
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if self.config.get("generate_all"):
+            slug = "todos"
+        else:
+            graph = self.config.get("graph", "grafico")
+            slug = self.GRAPH_SLUGS.get(graph, "grafico")
+        # Ex.: 2d_iops_lat_20260908_011530  ou  todos_20260908_011530
+        return f"{slug}_{stamp}"
+
     def _make_output_root(self):
         # Pasta base: config["results_root"] se informado, senão ~/FioBenchmark/resultados
         custom = self.config.get("results_root")
@@ -133,8 +152,10 @@ class BenchmarkRunner:
             base = Path.home() / "FioBenchmark" / "resultados"
         base.mkdir(parents=True, exist_ok=True)
 
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session = base / f"{stamp}_{uuid.uuid4().hex[:6]}"
+        session = base / self._session_folder_name()
+        # Se por acaso a pasta já existir (mesmo segundo), acrescenta sufixo curto
+        if session.exists():
+            session = base / f"{self._session_folder_name()}_{uuid.uuid4().hex[:4]}"
         session.mkdir(parents=True, exist_ok=False)
 
         return session
