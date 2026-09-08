@@ -621,16 +621,13 @@ class App(tk.Tk):
             plotter = PlotRunner(config, benchmark_result)
             png_path = plotter.run()
 
-            self.after(0, lambda: self._finish_success(png_path))
+            self.after(0, self._finish_success, png_path)
         except (BenchmarkError, PlotError, OSError) as exc:
-            self.after(0, lambda: self._finish_error(str(exc)))
+            message = str(exc)
+            self.after(0, self._finish_error, message)
         except Exception as exc:
-            self.after(
-                0,
-                lambda: self._finish_error(
-                    "Ocorreu um erro inesperado:\n" + str(exc)
-                ),
-            )
+            message = "Ocorreu um erro inesperado:\n" + str(exc)
+            self.after(0, self._finish_error, message)
 
     def _finish_success(self, png_path):
         self.running = False
