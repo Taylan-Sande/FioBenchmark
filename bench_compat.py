@@ -5,6 +5,26 @@ import tempfile
 from pathlib import Path
 
 
+def _escape_fio_windows_path(path):
+    """
+    Converte um caminho Windows para o formato esperado dentro de um job FIO.
+
+    Exemplo:
+        C:\\Users\\Taylan\\teste
+    vira:
+        C\\:\\Users\\Taylan\\teste
+
+    O FIO usa ':' como separador de múltiplos arquivos/diretórios, então o
+    ':' da letra da unidade precisa ser escapado dentro do arquivo .fio.
+    """
+    value = str(path).replace("/", "\\")
+
+    if len(value) >= 2 and value[1] == ":":
+        value = value[0] + r"\:" + value[2:]
+
+    return value
+
+
 @contextlib.contextmanager
 def bench_fio_compatibility():
     if os.name != "nt":
@@ -24,17 +44,19 @@ def bench_fio_compatibility():
         return original_subprocess_run(*args, **kwargs)
 
     def windows_drop_caches():
+        # A implementação original do bench-fio tenta usar:
+        # /proc/sys/vm/drop_caches, que é específica de Linux.
         return None
 
     def windows_run_fio(settings, benchmark):
-        benchmark.update(
-            {"target_base": benchmark["target"].replace("\\", "")}
-        )
+        # Mantém o caminho real para operações de filesystem do Python.
+        benchmark["target_base"] = benchmark["target"]
 
         output_directory = supporting.generate_output_directory(
             settings,
             benchmark,
         )
+
         output_file = (
             f"{output_directory}/"
             f"{benchmark['mode']}-"
@@ -48,10 +70,23 @@ def bench_fio_compatibility():
         safe_name = Path(benchmark["target_base"]).name or "benchmark"
         tmpjobfile = job_dir / f"{safe_name}-tmpjobfile.fio"
 
+        # O Python precisa do caminho normal, mas o arquivo de configuração
+        # do FIO precisa escapar o ':' da unidade Windows.
+        fio_benchmark = dict(benchmark)
+        fio_benchmark["target"] = _escape_fio_windows_path(
+            benchmark["target"]
+        )
+
+        # Os caminhos dos logs também são escritos dentro do .fio e precisam
+        # da mesma regra.
+        fio_output_directory = _escape_fio_windows_path(
+            output_directory
+        )
+
         generatefio.generate_fio_job_file(
             settings,
-            benchmark,
-            output_directory,
+            fio_benchmark,
+            fio_output_directory,
             str(tmpjobfile),
         )
 
