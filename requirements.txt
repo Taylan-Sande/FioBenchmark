@@ -1,0 +1,2 @@
+fio-plot==1.1.21
+Pillow>=9.0
