@@ -1,4 +1,5 @@
 import importlib.util
+import logging
 import os
 
 from benchmark_runner import BenchmarkResult
@@ -20,6 +21,31 @@ def check_plot_dependencies():
             "Em modo de desenvolvimento, execute:\n"
             "pip install -r requirements.txt"
         )
+
+
+def _apply_fio_plot_compatibility():
+    """
+    fio-plot 1.1.21 possui um bug em fio_plot.fiolib.jsonimport:
+    o módulo importa logging, mas usa uma variável global `logger`
+    que nunca é inicializada.
+
+    Normalmente o problema fica oculto; ele aparece quando o fio-plot
+    entra no tratamento de erro de um arquivo JSON. Criamos o logger
+    aqui sem modificar os arquivos da dependência.
+    """
+    from fio_plot.fiolib import jsonimport
+
+    if not hasattr(jsonimport, "logger"):
+        logger = logging.getLogger("fio_plot.fiolib.jsonimport")
+        logger.setLevel(logging.ERROR)
+        logger.propagate = False
+
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            logger.addHandler(handler)
+
+        jsonimport.logger = logger
 
 
 class PlotRunner:
@@ -125,11 +151,13 @@ class PlotRunner:
 
     def run(self):
         check_plot_dependencies()
+        _apply_fio_plot_compatibility()
 
         os.environ.setdefault("MPLBACKEND", "Agg")
         from fio_plot import main as fio_plot_main
 
         data_dir = self._find_data_directory()
+
         if self.config["graph"] == self.GRAPH_LINE:
             self._validate_line_logs(data_dir)
 
@@ -151,7 +179,7 @@ class PlotRunner:
             details = output.strip() or "fio-plot terminou sem mensagem."
             raise PlotError(
                 "O fio-plot não conseguiu gerar o gráfico.\n\n"
-                f"Detalhes:\n{details[-4000:]}"
+                f"Detalhes:\n{details[-6000:]}"
             )
 
         if not output_png.is_file() or output_png.stat().st_size == 0:
@@ -161,7 +189,7 @@ class PlotRunner:
                 "não foi criado."
             )
             if details:
-                message += "\n\nDetalhes:\n" + details[-3000:]
+                message += "\n\nDetalhes:\n" + details[-5000:]
             raise PlotError(message)
 
         return output_png
