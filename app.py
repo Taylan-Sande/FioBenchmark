@@ -947,10 +947,13 @@ class App(tk.Tk):
             if not answer:
                 return
 
-        # 1 passo = benchmark + N passos de gráfico
+        # Progresso = cada job FIO + cada gráfico
+        runner_preview = BenchmarkRunner(config)
+        num_jobs = runner_preview.expected_job_count()
         num_graphs = len(GRAPHS) if config.get("generate_all") else 1
-        self.progress_max = 1 + num_graphs
+        self.progress_max = num_jobs + num_graphs
         self.progress_value = 0
+        self._bench_jobs_total = num_jobs
 
         self.running = True
         self.run_button.configure(state="disabled")
@@ -958,7 +961,7 @@ class App(tk.Tk):
         self._set_progress(
             0,
             self.progress_max,
-            "Iniciando… Executando o benchmark. Não feche a aplicação.",
+            f"Iniciando… {num_jobs} job(s) de benchmark + {num_graphs} gráfico(s).",
         )
 
         thread = threading.Thread(
@@ -971,34 +974,42 @@ class App(tk.Tk):
     def _worker(self, config):
         try:
             total = self.progress_max
+            bench_total = self._bench_jobs_total
 
             self.after(
                 0,
                 lambda: self._set_progress(
                     0,
                     total,
-                    "Executando o benchmark. Não feche a aplicação.",
+                    f"Executando benchmark (0/{bench_total}). Não feche a aplicação.",
                 ),
             )
 
+            def bench_progress(done, job_total, message):
+                # done = jobs concluídos (1..bench_total)
+                self.after(
+                    0,
+                    lambda d=done, m=message: self._set_progress(d, total, m),
+                )
+
             benchmark = BenchmarkRunner(config)
-            benchmark_result = benchmark.run()
+            benchmark_result = benchmark.run(progress_callback=bench_progress)
 
             self.after(
                 0,
                 lambda: self._set_progress(
-                    1,
+                    bench_total,
                     total,
                     "Benchmark concluído. Gerando gráfico(s) com fio-plot…",
                 ),
             )
 
             def plot_progress(step, graph_total, message):
-                # step 1..N dos gráficos → progresso global = 1 + step
+                # step 1..N dos gráficos → progresso global = bench_total + step
                 self.after(
                     0,
                     lambda s=step, m=message: self._set_progress(
-                        1 + s, total, m
+                        bench_total + s, total, m
                     ),
                 )
 

@@ -70,24 +70,37 @@ def _extract_json_payload(stdout):
 
 
 @contextlib.contextmanager
-def bench_fio_compatibility():
+def bench_fio_compatibility(progress_callback=None):
     """
-    Camada mínima de compatibilidade do bench-fio para Windows.
+    Compatibilidade do bench-fio + gancho de progresso por job.
 
-    O bench-fio upstream possui trechos orientados a Linux, como /tmp e
-    drop_caches. Além disso, nesta aplicação o JSON do FIO é capturado pelo
-    stdout no Windows, validado e só então salvo em disco. Isso evita arquivos
-    JSON vazios que posteriormente quebrariam o fio-plot.
+    - No Windows: evita drop_caches, esconde console, grava JSON validado
+      e garante .log na pasta do resultado.
+    - Em qualquer SO: se progress_callback for passado, chama
+      progress_callback(done, total_hint, benchmark) após cada job FIO.
+      total_hint pode ser None se ainda desconhecido.
     """
-    if os.name != "nt":
-        yield
-        return
+    from bench_fio.benchlib import runfio
 
-    from bench_fio.benchlib import generatefio, runfio, supporting
-
-    original_drop_caches = runfio.drop_caches
     original_run_fio = runfio.run_fio
+    original_drop_caches = getattr(runfio, "drop_caches", None)
     original_subprocess_run = subprocess.run
+
+    job_counter = {"done": 0}
+
+    def notify_progress(benchmark):
+        if not progress_callback:
+            return
+        job_counter["done"] += 1
+        try:
+            progress_callback(job_counter["done"], None, benchmark)
+        except Exception:
+            pass
+
+    # ---- Windows-only patches (defined below, applied if nt) ----
+    apply_windows = os.name == "nt"
+    if apply_windows:
+        from bench_fio.benchlib import generatefio, supporting
 
     def hidden_subprocess_run(*args, **kwargs):
         flags = kwargs.get("creationflags", 0)
@@ -232,13 +245,29 @@ def bench_fio_compatibility():
             except OSError:
                 pass
 
-    runfio.drop_caches = windows_drop_caches
-    runfio.run_fio = windows_run_fio
-    subprocess.run = hidden_subprocess_run
+    def progress_wrapped_run_fio(settings, benchmark):
+        """Envolve o run_fio atual (Linux original ou Windows) com progresso."""
+        result = base_run_fio(settings, benchmark)
+        notify_progress(benchmark)
+        return result
+
+    # base_run_fio = implementação efetiva antes do wrapper de progresso
+    if apply_windows:
+        runfio.drop_caches = windows_drop_caches
+        subprocess.run = hidden_subprocess_run
+        base_run_fio = windows_run_fio
+    else:
+        base_run_fio = original_run_fio
+
+    if progress_callback:
+        runfio.run_fio = progress_wrapped_run_fio
+    else:
+        runfio.run_fio = base_run_fio
 
     try:
         yield
     finally:
         subprocess.run = original_subprocess_run
         runfio.run_fio = original_run_fio
-        runfio.drop_caches = original_drop_caches
+        if original_drop_caches is not None:
+            runfio.drop_caches = original_drop_caches

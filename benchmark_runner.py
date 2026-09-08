@@ -195,7 +195,21 @@ class BenchmarkRunner:
 
         return command
 
-    def run(self):
+    def expected_job_count(self):
+        """Quantidade de jobs FIO que o bench-fio vai disparar."""
+        cfg = self.config
+        # loop_items no bench-fio: target × mode × iodepth × numjobs × block_size
+        # aqui usamos 1 target, 1 mode, 1 block_size
+        iodepths = cfg.get("iodepths") or [1]
+        numjobs = cfg.get("numjobs") or [1]
+        loops = int(cfg.get("loops", 1) or 1)
+        return max(1, len(iodepths) * len(numjobs) * loops)
+
+    def run(self, progress_callback=None):
+        """
+        progress_callback(done_jobs, total_jobs, message) é opcional.
+        Chamado após cada job FIO individual.
+        """
         check_benchmark_dependencies()
 
         from bench_fio import main as bench_fio_main
@@ -209,9 +223,22 @@ class BenchmarkRunner:
         target_workdir.mkdir(parents=False, exist_ok=False)
 
         command = self._build_command(target_workdir, output_root)
+        total_jobs = self.expected_job_count()
+
+        def on_fio_job(done, _total_hint, benchmark):
+            if not progress_callback:
+                return
+            qd = benchmark.get("iodepth", "?")
+            nj = benchmark.get("numjobs", "?")
+            mode = benchmark.get("mode", "?")
+            message = (
+                f"Benchmark job {done}/{total_jobs}: "
+                f"{mode} · IODepth={qd} · NumJobs={nj}"
+            )
+            progress_callback(done, total_jobs, message)
 
         try:
-            with bench_fio_compatibility():
+            with bench_fio_compatibility(progress_callback=on_fio_job):
                 return_code, output = run_embedded_cli(
                     "bench-fio",
                     bench_fio_main,
