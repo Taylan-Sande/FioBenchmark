@@ -1,3 +1,4 @@
+import builtins
 import contextlib
 import sys
 import tempfile
@@ -5,6 +6,15 @@ import tempfile
 
 def run_embedded_cli(program_name, main_function, arguments):
     old_argv = sys.argv[:]
+
+    had_exit = hasattr(builtins, "exit")
+    had_quit = hasattr(builtins, "quit")
+
+    old_exit = getattr(builtins, "exit", None)
+    old_quit = getattr(builtins, "quit", None)
+
+    builtins.exit = sys.exit
+    builtins.quit = sys.exit
 
     with tempfile.TemporaryFile(
         mode="w+",
@@ -41,3 +51,13 @@ def run_embedded_cli(program_name, main_function, arguments):
 
         finally:
             sys.argv = old_argv
+
+            if had_exit:
+                builtins.exit = old_exit
+            else:
+                delattr(builtins, "exit")
+
+            if had_quit:
+                builtins.quit = old_quit
+            else:
+                delattr(builtins, "quit")
