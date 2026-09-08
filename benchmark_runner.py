@@ -125,7 +125,12 @@ class BenchmarkRunner:
         return target
 
     def _make_output_root(self):
-        base = Path.home() / "FioBenchmark" / "resultados"
+        # Pasta base: config["results_root"] se informado, senão ~/FioBenchmark/resultados
+        custom = self.config.get("results_root")
+        if custom:
+            base = Path(custom).expanduser().resolve()
+        else:
+            base = Path.home() / "FioBenchmark" / "resultados"
         base.mkdir(parents=True, exist_ok=True)
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

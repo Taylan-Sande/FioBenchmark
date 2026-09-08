@@ -19,6 +19,7 @@ from plot_runner import PlotError, PlotRunner, check_plot_dependencies
 
 
 APP_TITLE = "FIO Benchmark"
+DEFAULT_RESULTS_ROOT = Path.home() / "FioBenchmark" / "resultados"
 
 GRAPH_2D = "2D — IOPS e Latência por IODepth"
 GRAPH_3D_IOPS = "3D — IOPS × IODepth × NumJobs"
@@ -55,6 +56,45 @@ GRAPH_DESCRIPTIONS = {
         "Varia IODepth e NumJobs. O fio-plot usa -L -t lat.",
 }
 
+# Temas claro / escuro para ttk (tema "clam")
+LIGHT_THEME = {
+    "bg": "#f0f0f0",
+    "fg": "#1a1a1a",
+    "field_bg": "#ffffff",
+    "select_bg": "#0078d4",
+    "select_fg": "#ffffff",
+    "button_bg": "#e1e1e1",
+    "button_active": "#d0d0d0",
+    "frame_bg": "#f0f0f0",
+    "labelframe_bg": "#f0f0f0",
+    "hint_fg": "#555555",
+    "primary_bg": "#0078d4",
+    "primary_fg": "#ffffff",
+    "primary_active": "#106ebe",
+    "border": "#c0c0c0",
+    "trough": "#d0d0d0",
+    "progress": "#0078d4",
+}
+
+DARK_THEME = {
+    "bg": "#1e1e1e",
+    "fg": "#e0e0e0",
+    "field_bg": "#2d2d2d",
+    "select_bg": "#0e639c",
+    "select_fg": "#ffffff",
+    "button_bg": "#3c3c3c",
+    "button_active": "#505050",
+    "frame_bg": "#1e1e1e",
+    "labelframe_bg": "#252526",
+    "hint_fg": "#a0a0a0",
+    "primary_bg": "#0e639c",
+    "primary_fg": "#ffffff",
+    "primary_active": "#1177bb",
+    "border": "#3c3c3c",
+    "trough": "#3c3c3c",
+    "progress": "#0e639c",
+}
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -68,15 +108,18 @@ class App(tk.Tk):
         self.result_source_image = None
         self.resize_after_id = None
         self.running = False
+        self.dark_mode = False
+        self._style = None
 
         self.bind("<Escape>", self._exit_fullscreen)
         self.bind("<F11>", self._toggle_fullscreen)
 
-        self._configure_style()
         self._create_variables()
+        self._configure_style()
         self._build_ui()
         self._update_graph_fields()
         self._update_readmix_state()
+        self._apply_theme()
 
     def report_callback_exception(self, exc, value, tb):
         details = "".join(traceback.format_exception(exc, value, tb))
@@ -104,20 +147,165 @@ class App(tk.Tk):
             pass
 
     def _configure_style(self):
-        style = ttk.Style(self)
+        self._style = ttk.Style(self)
         try:
-            style.theme_use("clam")
+            self._style.theme_use("clam")
         except tk.TclError:
             pass
 
-        style.configure("Title.TLabel", font=("TkDefaultFont", 20, "bold"))
-        style.configure("Section.TLabel", font=("TkDefaultFont", 11, "bold"))
-        style.configure("Hint.TLabel", foreground="#555555")
-        style.configure("Primary.TButton", font=("TkDefaultFont", 10, "bold"))
+        self._style.configure("Title.TLabel", font=("TkDefaultFont", 20, "bold"))
+        self._style.configure("Section.TLabel", font=("TkDefaultFont", 11, "bold"))
+        self._style.configure("Primary.TButton", font=("TkDefaultFont", 10, "bold"))
+
+    def _apply_theme(self):
+        theme = DARK_THEME if self.dark_mode else LIGHT_THEME
+        style = self._style
+
+        self.configure(bg=theme["bg"])
+
+        style.configure(
+            ".",
+            background=theme["bg"],
+            foreground=theme["fg"],
+            fieldbackground=theme["field_bg"],
+            troughcolor=theme["trough"],
+            bordercolor=theme["border"],
+            lightcolor=theme["border"],
+            darkcolor=theme["border"],
+        )
+        style.configure("TFrame", background=theme["frame_bg"])
+        style.configure(
+            "TLabelframe",
+            background=theme["labelframe_bg"],
+            foreground=theme["fg"],
+            bordercolor=theme["border"],
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=theme["labelframe_bg"],
+            foreground=theme["fg"],
+        )
+        style.configure("TLabel", background=theme["bg"], foreground=theme["fg"])
+        style.configure(
+            "Title.TLabel",
+            background=theme["bg"],
+            foreground=theme["fg"],
+            font=("TkDefaultFont", 20, "bold"),
+        )
+        style.configure(
+            "Hint.TLabel",
+            background=theme["bg"],
+            foreground=theme["hint_fg"],
+        )
+        style.configure(
+            "TButton",
+            background=theme["button_bg"],
+            foreground=theme["fg"],
+            bordercolor=theme["border"],
+        )
+        style.map(
+            "TButton",
+            background=[("active", theme["button_active"]), ("disabled", theme["trough"])],
+            foreground=[("disabled", theme["hint_fg"])],
+        )
+        style.configure(
+            "Primary.TButton",
+            background=theme["primary_bg"],
+            foreground=theme["primary_fg"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", theme["primary_active"]), ("disabled", theme["trough"])],
+            foreground=[("disabled", theme["hint_fg"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=theme["field_bg"],
+            foreground=theme["fg"],
+            insertcolor=theme["fg"],
+            bordercolor=theme["border"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=theme["field_bg"],
+            foreground=theme["fg"],
+            background=theme["button_bg"],
+            arrowcolor=theme["fg"],
+            bordercolor=theme["border"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", theme["field_bg"])],
+            foreground=[("readonly", theme["fg"])],
+            selectbackground=[("readonly", theme["select_bg"])],
+            selectforeground=[("readonly", theme["select_fg"])],
+        )
+        style.configure(
+            "TSpinbox",
+            fieldbackground=theme["field_bg"],
+            foreground=theme["fg"],
+            insertcolor=theme["fg"],
+            bordercolor=theme["border"],
+            arrowcolor=theme["fg"],
+        )
+        style.configure(
+            "TProgressbar",
+            background=theme["progress"],
+            troughcolor=theme["trough"],
+            bordercolor=theme["border"],
+        )
+        style.configure(
+            "TScrollbar",
+            background=theme["button_bg"],
+            troughcolor=theme["trough"],
+            bordercolor=theme["border"],
+            arrowcolor=theme["fg"],
+        )
+        style.map(
+            "TScrollbar",
+            background=[("active", theme["button_active"])],
+        )
+        style.configure(
+            "TPanedwindow",
+            background=theme["bg"],
+        )
+        style.configure(
+            "Sash",
+            sashthickness=6,
+            background=theme["border"],
+        )
+
+        # Canvas usado no formulário rolável (não é ttk)
+        if hasattr(self, "_form_canvas"):
+            self._form_canvas.configure(
+                bg=theme["bg"],
+                highlightbackground=theme["bg"],
+                highlightcolor=theme["bg"],
+            )
+
+        # Dropdown do Combobox (lista popup)
+        try:
+            self.option_add("*TCombobox*Listbox.background", theme["field_bg"])
+            self.option_add("*TCombobox*Listbox.foreground", theme["fg"])
+            self.option_add("*TCombobox*Listbox.selectBackground", theme["select_bg"])
+            self.option_add("*TCombobox*Listbox.selectForeground", theme["select_fg"])
+        except tk.TclError:
+            pass
+
+        if hasattr(self, "dark_mode_button"):
+            self.dark_mode_button.configure(
+                text="☀ Modo claro" if self.dark_mode else "🌙 Modo escuro"
+            )
+
+    def _toggle_dark_mode(self):
+        self.dark_mode = not self.dark_mode
+        self._apply_theme()
 
     def _create_variables(self):
         self.graph_var = tk.StringVar(value=GRAPH_2D)
         self.target_var = tk.StringVar()
+        self.results_root_var = tk.StringVar(value=str(DEFAULT_RESULTS_ROOT))
 
         self.size_mb_var = tk.StringVar(value="1024")
         self.mode_var = tk.StringVar(value="randread")
@@ -140,7 +328,20 @@ class App(tk.Tk):
         main = ttk.Frame(self, padding=16)
         main.pack(fill="both", expand=True)
 
-        ttk.Label(main, text="FIO Benchmark", style="Title.TLabel").pack(anchor="w")
+        header = ttk.Frame(main)
+        header.pack(fill="x", pady=(0, 4))
+
+        ttk.Label(header, text="FIO Benchmark", style="Title.TLabel").pack(
+            side="left", anchor="w"
+        )
+        self.dark_mode_button = ttk.Button(
+            header,
+            text="🌙 Modo escuro",
+            command=self._toggle_dark_mode,
+            width=14,
+        )
+        self.dark_mode_button.pack(side="right", padx=(8, 0))
+
         ttk.Label(
             main,
             text=(
@@ -163,6 +364,7 @@ class App(tk.Tk):
 
     def _build_form(self, parent):
         canvas = tk.Canvas(parent, highlightthickness=0)
+        self._form_canvas = canvas
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         content = ttk.Frame(canvas)
 
@@ -182,6 +384,7 @@ class App(tk.Tk):
 
         self._graph_section(content)
         self._target_section(content)
+        self._results_section(content)
         self._common_section(content)
         self._graph_options_section(content)
         self._action_section(content)
@@ -258,8 +461,42 @@ class App(tk.Tk):
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
 
+    def _results_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="3. Pasta de resultados", padding=12)
+        frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(
+            frame,
+            text=(
+                "Os resultados (dados do FIO + gráficos) serão salvos aqui. "
+                "Cada execução cria uma subpasta com data/hora."
+            ),
+            wraplength=620,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
+        ttk.Entry(frame, textvariable=self.results_root_var).grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=(0, 8)
+        )
+        ttk.Button(
+            frame,
+            text="Escolher...",
+            command=self._choose_results_root,
+        ).grid(row=1, column=2)
+
+        ttk.Label(
+            frame,
+            text=f"Padrão: {DEFAULT_RESULTS_ROOT}",
+            style="Hint.TLabel",
+            wraplength=620,
+            justify="left",
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+
     def _common_section(self, parent):
-        frame = ttk.LabelFrame(parent, text="3. Configurações comuns", padding=12)
+        frame = ttk.LabelFrame(parent, text="4. Configurações comuns", padding=12)
         frame.pack(fill="x", pady=(0, 10))
 
         ttk.Label(frame, text="Modo de I/O:").grid(row=0, column=0, sticky="w")
@@ -329,7 +566,7 @@ class App(tk.Tk):
     def _graph_options_section(self, parent):
         self.graph_options_frame = ttk.LabelFrame(
             parent,
-            text="4. Sequência de testes",
+            text="5. Sequência de testes",
             padding=12,
         )
         self.graph_options_frame.pack(fill="x", pady=(0, 10))
@@ -486,6 +723,20 @@ class App(tk.Tk):
         if folder:
             self.target_var.set(folder)
 
+    def _choose_results_root(self):
+        initial = self.results_root_var.get().strip() or str(DEFAULT_RESULTS_ROOT)
+        try:
+            Path(initial).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            initial = str(Path.home())
+
+        folder = filedialog.askdirectory(
+            title="Escolha a pasta onde salvar os resultados",
+            initialdir=initial,
+        )
+        if folder:
+            self.results_root_var.set(folder)
+
     @staticmethod
     def _positive_int(value, field, allow_zero=False):
         try:
@@ -515,6 +766,23 @@ class App(tk.Tk):
             raise ValueError("Selecione a pasta da unidade que deseja testar.")
         if not target.is_dir():
             raise ValueError("A pasta selecionada não existe.")
+
+        results_root_text = self.results_root_var.get().strip()
+        if not results_root_text:
+            raise ValueError("Informe a pasta de resultados.")
+        results_root = Path(results_root_text).expanduser()
+        try:
+            results_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(
+                f"Não foi possível criar/usar a pasta de resultados:\n{exc}"
+            ) from exc
+        if not results_root.is_dir():
+            raise ValueError("A pasta de resultados informada não existe.")
+        if not os.access(results_root, os.W_OK):
+            raise ValueError(
+                "Sem permissão de escrita na pasta de resultados escolhida."
+            )
 
         title = self.title_var.get().strip()
         if not title:
@@ -555,6 +823,7 @@ class App(tk.Tk):
         return {
             "graph": graph,
             "target_root": str(target),
+            "results_root": str(results_root.resolve()),
             "size_mb": size_mb,
             "mode": self.mode_var.get(),
             "block_size": self.block_size_var.get(),
@@ -619,9 +888,14 @@ class App(tk.Tk):
             )
 
             plotter = PlotRunner(config, benchmark_result)
-            png_path = plotter.run()
+            result = plotter.run()
+            # Compatível com versão antiga (Path único) e nova (lista de Paths)
+            if isinstance(result, (list, tuple)):
+                png_paths = list(result)
+            else:
+                png_paths = [result]
 
-            self.after(0, self._finish_success, png_path)
+            self.after(0, self._finish_success, png_paths)
         except (BenchmarkError, PlotError, OSError) as exc:
             message = str(exc)
             self.after(0, self._finish_error, message)
@@ -629,14 +903,26 @@ class App(tk.Tk):
             message = "Ocorreu um erro inesperado:\n" + str(exc)
             self.after(0, self._finish_error, message)
 
-    def _finish_success(self, png_path):
+    def _finish_success(self, png_paths):
         self.running = False
         self.progress.stop()
         self.run_button.configure(state="normal")
         self.status_var.set("Concluído.")
-        self.result_path_var.set(f"Gráfico: {png_path}")
-        self.open_folder_button.configure(state="normal")
-        self._show_image(Path(png_path))
+
+        primary = Path(png_paths[0]) if png_paths else None
+        if primary is not None:
+            if len(png_paths) == 1:
+                self.result_path_var.set(f"Gráfico: {primary}")
+            else:
+                self.result_path_var.set(
+                    f"{len(png_paths)} gráficos em: {primary.parent}"
+                )
+            self.open_folder_button.configure(state="normal")
+            self._show_image(primary)
+        else:
+            self.result_path_var.set("")
+            self.open_folder_button.configure(state="disabled")
+
         messagebox.showinfo(
             "Concluído",
             "O benchmark terminou e o gráfico foi gerado.",
@@ -728,11 +1014,31 @@ class App(tk.Tk):
         self.attributes("-fullscreen", not current)
 
     def _open_result_folder(self):
-        path_text = self.result_path_var.get().removeprefix("Gráfico: ").strip()
+        path_text = self.result_path_var.get().strip()
         if not path_text:
             return
 
-        folder = Path(path_text).parent
+        # Formatos possíveis:
+        # "Gráfico: /path/to/grafico.png"
+        # "N gráficos em: /path/to/session"
+        if path_text.startswith("Gráfico: "):
+            path_text = path_text.removeprefix("Gráfico: ").strip()
+            folder = Path(path_text).parent
+        elif " gráficos em: " in path_text:
+            path_text = path_text.split(" gráficos em: ", 1)[-1].strip()
+            folder = Path(path_text)
+        else:
+            folder = Path(path_text)
+            if folder.is_file():
+                folder = folder.parent
+
+        if not folder.exists():
+            messagebox.showerror(
+                "Pasta não encontrada",
+                f"A pasta não existe:\n{folder}",
+            )
+            return
+
         try:
             if os.name == "nt":
                 os.startfile(folder)

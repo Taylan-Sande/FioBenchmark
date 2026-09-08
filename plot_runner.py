@@ -1,6 +1,7 @@
 import importlib.util
 import logging
 import os
+from pathlib import Path
 
 from benchmark_runner import BenchmarkResult
 from embedded_cli import run_embedded_cli
@@ -53,6 +54,22 @@ class PlotRunner:
     GRAPH_2D_GROUPED = "2D agrupado — IOPS e Latência"
     GRAPH_3D_LAT = "3D — Latência × IODepth × NumJobs"
 
+    ALL_GRAPHS = (
+        GRAPH_2D,
+        GRAPH_3D_IOPS,
+        GRAPH_LINE,
+        GRAPH_2D_GROUPED,
+        GRAPH_3D_LAT,
+    )
+
+    GRAPH_FILENAMES = {
+        GRAPH_2D: "grafico_2d_iops_lat.png",
+        GRAPH_3D_IOPS: "grafico_3d_iops.png",
+        GRAPH_LINE: "grafico_line_chart.png",
+        GRAPH_2D_GROUPED: "grafico_2d_agrupado.png",
+        GRAPH_3D_LAT: "grafico_3d_lat.png",
+    }
+
     def __init__(self, config, benchmark_result: BenchmarkResult):
         self.config = config
         self.result = benchmark_result
@@ -83,7 +100,7 @@ class PlotRunner:
         return max(candidates, key=candidates.get)
 
     def _metrics_for_line_chart(self):
-        metric = self.config["log_metric"]
+        metric = self.config.get("log_metric", "IOPS e Latência")
 
         if metric == "IOPS":
             return ["iops"]
@@ -99,9 +116,16 @@ class PlotRunner:
                 "mas nenhum foi encontrado."
             )
 
-    def _build_command(self, data_dir, output_png):
+    def _numjobs_for_plot(self, graph):
+        """Para gráficos 2D/Line usa o primeiro numjobs; para 3D usa a lista completa."""
+        numjobs = self.config["numjobs"]
+        if graph in (self.GRAPH_2D, self.GRAPH_2D_GROUPED, self.GRAPH_LINE):
+            return [numjobs[0]]
+        return numjobs
+
+    def _build_command(self, data_dir, output_png, graph):
         cfg = self.config
-        graph = cfg["graph"]
+        numjobs = self._numjobs_for_plot(graph)
 
         command = [
             "fio-plot",
@@ -115,7 +139,7 @@ class PlotRunner:
             command.extend(
                 [
                     "-l",
-                    "-n", str(cfg["numjobs"][0]),
+                    "-n", str(numjobs[0]),
                     "-d", *[str(v) for v in cfg["iodepths"]],
                 ]
             )
@@ -123,7 +147,7 @@ class PlotRunner:
             command.extend(
                 [
                     "-l",
-                    "-n", str(cfg["numjobs"][0]),
+                    "-n", str(numjobs[0]),
                     "-d", *[str(v) for v in cfg["iodepths"]],
                     "--group-bars",
                 ]
@@ -138,7 +162,7 @@ class PlotRunner:
                     "-g",
                     "-t", *self._metrics_for_line_chart(),
                     "-d", *[str(v) for v in cfg["iodepths"]],
-                    "-n", str(cfg["numjobs"][0]),
+                    "-n", str(numjobs[0]),
                     "--xlabel-parent", "0",
                 ]
             )
@@ -147,20 +171,13 @@ class PlotRunner:
 
         return command
 
-    def run(self):
-        check_plot_dependencies()
-        _apply_fio_plot_compatibility()
-
-        os.environ.setdefault("MPLBACKEND", "Agg")
+    def _run_one(self, data_dir, graph, output_png: Path):
         from fio_plot import main as fio_plot_main
 
-        data_dir = self._find_data_directory()
-
-        if self.config["graph"] == self.GRAPH_LINE:
+        if graph == self.GRAPH_LINE:
             self._validate_line_logs(data_dir)
 
-        output_png = self.result.output_root / "grafico.png"
-        command = self._build_command(data_dir, output_png)
+        command = self._build_command(data_dir, output_png, graph)
 
         try:
             return_code, output = run_embedded_cli(
@@ -170,24 +187,65 @@ class PlotRunner:
             )
         except Exception as exc:
             raise PlotError(
-                "Não foi possível executar o fio-plot:\n" + str(exc)
+                f"Não foi possível executar o fio-plot ({graph}):\n" + str(exc)
             ) from exc
 
         if return_code != 0:
             details = output.strip() or "fio-plot terminou sem mensagem."
             raise PlotError(
-                "O fio-plot não conseguiu gerar o gráfico.\n\n"
+                f"O fio-plot não conseguiu gerar o gráfico ({graph}).\n\n"
                 f"Detalhes:\n{details[-6000:]}"
             )
 
         if not output_png.is_file() or output_png.stat().st_size == 0:
             details = output.strip()
             message = (
-                "O fio-plot terminou sem erro, mas o arquivo grafico.png "
-                "não foi criado."
+                f"O fio-plot terminou sem erro, mas o arquivo "
+                f"{output_png.name} não foi criado ({graph})."
             )
             if details:
                 message += "\n\nDetalhes:\n" + details[-5000:]
             raise PlotError(message)
 
         return output_png
+
+    def run(self, progress_callback=None):
+        """
+        Gera um ou todos os gráficos conforme config["generate_all"].
+        progress_callback(step, total, message) é opcional.
+        Retorna lista de Path dos PNGs gerados (o primeiro é o principal para a UI).
+        """
+        check_plot_dependencies()
+        _apply_fio_plot_compatibility()
+
+        os.environ.setdefault("MPLBACKEND", "Agg")
+
+        data_dir = self._find_data_directory()
+        generate_all = bool(self.config.get("generate_all", False))
+
+        if generate_all:
+            graphs = list(self.ALL_GRAPHS)
+        else:
+            graphs = [self.config["graph"]]
+
+        total = len(graphs)
+        pngs = []
+
+        for idx, graph in enumerate(graphs, start=1):
+            filename = self.GRAPH_FILENAMES.get(graph, "grafico.png")
+            if not generate_all:
+                # Mantém nome clássico quando é só um gráfico
+                filename = "grafico.png"
+            output_png = self.result.output_root / filename
+
+            if progress_callback:
+                progress_callback(
+                    idx,
+                    total,
+                    f"Gerando gráfico {idx}/{total}: {graph}",
+                )
+
+            png = self._run_one(data_dir, graph, output_png)
+            pngs.append(png)
+
+        return pngs
