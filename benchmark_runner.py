@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import platform
 import shutil
@@ -55,6 +56,39 @@ def _io_engine():
     return "sync"
 
 
+def _validate_json_results(output_root):
+    json_files = list(Path(output_root).rglob("*.json"))
+
+    if not json_files:
+        raise BenchmarkError(
+            "O benchmark terminou, mas nenhum arquivo JSON foi gerado."
+        )
+
+    invalid = []
+
+    for file in json_files:
+        try:
+            if file.stat().st_size == 0:
+                invalid.append(f"{file} — arquivo vazio")
+                continue
+
+            with file.open("r", encoding="utf-8-sig") as handle:
+                json.load(handle)
+
+        except (OSError, json.JSONDecodeError) as exc:
+            invalid.append(f"{file} — {exc}")
+
+    if invalid:
+        details = "\n".join(invalid[:10])
+        raise BenchmarkError(
+            "O FIO gerou resultado JSON inválido. O gráfico não será "
+            "executado com dados corrompidos.\n\n"
+            f"{details}"
+        )
+
+    return json_files
+
+
 class BenchmarkRunner:
     WRITE_MODES = {"write", "randwrite", "randrw", "rw", "readwrite"}
 
@@ -77,9 +111,11 @@ class BenchmarkRunner:
         required_with_margin = int(required_bytes * 1.10)
 
         free_bytes = shutil.disk_usage(target).free
+
         if free_bytes < required_with_margin:
             required_gb = required_with_margin / (1024 ** 3)
             free_gb = free_bytes / (1024 ** 3)
+
             raise BenchmarkError(
                 "Não há espaço livre suficiente para o teste.\n\n"
                 f"Necessário com margem: {required_gb:.2f} GB\n"
@@ -95,6 +131,7 @@ class BenchmarkRunner:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         session = base / f"{stamp}_{uuid.uuid4().hex[:6]}"
         session.mkdir(parents=True, exist_ok=False)
+
         return session
 
     def _build_command(self, target_workdir, output_root):
@@ -156,24 +193,22 @@ class BenchmarkRunner:
                 )
         except Exception as exc:
             raise BenchmarkError(
-                "Não foi possível executar o bench-fio:\n" + str(exc)
+                "Não foi possível executar o benchmark:\n" + str(exc)
             ) from exc
         finally:
             shutil.rmtree(target_workdir, ignore_errors=True)
 
         if return_code != 0:
             details = output.strip() or "bench-fio terminou sem mensagem."
+
             raise BenchmarkError(
                 "O benchmark falhou.\n\n"
-                f"Detalhes:\n{details[-4000:]}"
+                f"Detalhes:\n{details[-6000:]}"
             )
 
-        json_files = list(output_root.rglob("*.json"))
-        if not json_files:
-            raise BenchmarkError(
-                "O bench-fio terminou, mas nenhum arquivo JSON foi encontrado "
-                "na pasta de resultados."
-            )
+        # Não basta o arquivo existir. Ele precisa ser JSON válido antes
+        # de o fio-plot receber os resultados.
+        _validate_json_results(output_root)
 
         return BenchmarkResult(
             output_root=output_root,

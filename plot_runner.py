@@ -41,9 +41,7 @@ def _apply_fio_plot_compatibility():
         logger.propagate = False
 
         if not logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-            logger.addHandler(handler)
+            logger.addHandler(logging.NullHandler())
 
         jsonimport.logger = logger
 
