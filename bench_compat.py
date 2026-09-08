@@ -69,8 +69,28 @@ def _extract_json_payload(stdout):
         return candidate
 
 
+def kill_running_fio():
+    """Tenta encerrar processos fio iniciados pelo benchmark (cancelar)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "fio.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            subprocess.run(
+                ["pkill", "-f", "fio"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass
+
+
 @contextlib.contextmanager
-def bench_fio_compatibility(progress_callback=None):
+def bench_fio_compatibility(progress_callback=None, cancel_event=None):
     """
     Compatibilidade do bench-fio + gancho de progresso por job.
 
@@ -78,7 +98,7 @@ def bench_fio_compatibility(progress_callback=None):
       e garante .log na pasta do resultado.
     - Em qualquer SO: se progress_callback for passado, chama
       progress_callback(done, total_hint, benchmark) após cada job FIO.
-      total_hint pode ser None se ainda desconhecido.
+    - cancel_event: se setado, interrompe antes do próximo job e mata o fio.
     """
     from bench_fio.benchlib import runfio
 
@@ -88,7 +108,12 @@ def bench_fio_compatibility(progress_callback=None):
 
     job_counter = {"done": 0}
 
+    def _cancelled():
+        return cancel_event is not None and cancel_event.is_set()
+
     def notify_progress(benchmark):
+        if _cancelled():
+            raise RuntimeError("Benchmark cancelado pelo usuário.")
         if not progress_callback:
             return
         job_counter["done"] += 1
@@ -247,7 +272,13 @@ def bench_fio_compatibility(progress_callback=None):
 
     def progress_wrapped_run_fio(settings, benchmark):
         """Envolve o run_fio atual (Linux original ou Windows) com progresso."""
+        if _cancelled():
+            kill_running_fio()
+            raise RuntimeError("Benchmark cancelado pelo usuário.")
         result = base_run_fio(settings, benchmark)
+        if _cancelled():
+            kill_running_fio()
+            raise RuntimeError("Benchmark cancelado pelo usuário.")
         notify_progress(benchmark)
         return result
 

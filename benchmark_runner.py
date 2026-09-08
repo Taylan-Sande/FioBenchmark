@@ -205,10 +205,22 @@ class BenchmarkRunner:
         loops = int(cfg.get("loops", 1) or 1)
         return max(1, len(iodepths) * len(numjobs) * loops)
 
-    def run(self, progress_callback=None):
+    def estimated_seconds(self):
+        """
+        Estimativa grosseira de duração do benchmark.
+        runtime + ramp_time por job (+ overhead ~2s por job).
+        """
+        cfg = self.config
+        runtime = int(cfg.get("runtime") or 0)
+        ramp = int(cfg.get("ramp_time") or 0)
+        jobs = self.expected_job_count()
+        per_job = runtime + ramp + 2
+        return jobs * per_job
+
+    def run(self, progress_callback=None, cancel_event=None):
         """
         progress_callback(done_jobs, total_jobs, message) é opcional.
-        Chamado após cada job FIO individual.
+        cancel_event: threading.Event — se setado, interrompe entre jobs.
         """
         check_benchmark_dependencies()
 
@@ -226,6 +238,8 @@ class BenchmarkRunner:
         total_jobs = self.expected_job_count()
 
         def on_fio_job(done, _total_hint, benchmark):
+            if cancel_event is not None and cancel_event.is_set():
+                raise BenchmarkError("Benchmark cancelado pelo usuário.")
             if not progress_callback:
                 return
             qd = benchmark.get("iodepth", "?")
@@ -238,22 +252,33 @@ class BenchmarkRunner:
             progress_callback(done, total_jobs, message)
 
         try:
-            with bench_fio_compatibility(progress_callback=on_fio_job):
+            with bench_fio_compatibility(
+                progress_callback=on_fio_job,
+                cancel_event=cancel_event,
+            ):
                 return_code, output = run_embedded_cli(
                     "bench-fio",
                     bench_fio_main,
                     command[1:],
                 )
+        except BenchmarkError:
+            raise
         except Exception as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise BenchmarkError("Benchmark cancelado pelo usuário.") from exc
             raise BenchmarkError(
                 "Não foi possível executar o benchmark:\n" + str(exc)
             ) from exc
         finally:
             shutil.rmtree(target_workdir, ignore_errors=True)
 
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkError("Benchmark cancelado pelo usuário.")
+
         if return_code != 0:
             details = output.strip() or "bench-fio terminou sem mensagem."
-
+            if cancel_event is not None and cancel_event.is_set():
+                raise BenchmarkError("Benchmark cancelado pelo usuário.")
             raise BenchmarkError(
                 "O benchmark falhou.\n\n"
                 f"Detalhes:\n{details[-6000:]}"

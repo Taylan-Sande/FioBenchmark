@@ -16,6 +16,8 @@ from benchmark_runner import (
     check_benchmark_dependencies,
 )
 from plot_runner import PlotError, PlotRunner, check_plot_dependencies
+from report_utils import export_html_report
+from user_settings import load_settings, save_settings
 
 
 APP_TITLE = "FIO Benchmark"
@@ -110,6 +112,12 @@ class App(tk.Tk):
         self.running = False
         self.dark_mode = False
         self._style = None
+        self.cancel_event = threading.Event()
+        self._last_session_dir = None
+        self._last_config = None
+        self._last_png_paths = []
+        self._bench_jobs_total = 1
+        self._settings = load_settings()
 
         self.bind("<Escape>", self._exit_fullscreen)
         self.bind("<F11>", self._toggle_fullscreen)
@@ -120,6 +128,8 @@ class App(tk.Tk):
         self._update_graph_fields()
         self._update_readmix_state()
         self._apply_theme()
+        self._refresh_time_estimate()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def report_callback_exception(self, exc, value, tb):
         details = "".join(traceback.format_exception(exc, value, tb))
@@ -301,11 +311,16 @@ class App(tk.Tk):
     def _toggle_dark_mode(self):
         self.dark_mode = not self.dark_mode
         self._apply_theme()
+        self._persist_paths()
 
     def _create_variables(self):
+        saved = self._settings
+        self.dark_mode = bool(saved.get("dark_mode", False))
+
         self.graph_var = tk.StringVar(value=GRAPH_2D)
-        self.target_var = tk.StringVar()
-        self.results_root_var = tk.StringVar(value=str(DEFAULT_RESULTS_ROOT))
+        self.target_var = tk.StringVar(value=str(saved.get("target_root") or ""))
+        results = saved.get("results_root") or str(DEFAULT_RESULTS_ROOT)
+        self.results_root_var = tk.StringVar(value=str(results))
 
         self.size_mb_var = tk.StringVar(value="1024")
         self.mode_var = tk.StringVar(value="randread")
@@ -324,8 +339,17 @@ class App(tk.Tk):
 
         self.status_var = tk.StringVar(value="Pronto.")
         self.result_path_var = tk.StringVar(value="")
+        self.estimate_var = tk.StringVar(value="")
         self.progress_max = 1
         self.progress_value = 0
+
+        if saved.get("last_session"):
+            try:
+                p = Path(saved["last_session"])
+                if p.is_dir():
+                    self._last_session_dir = p
+            except (TypeError, OSError):
+                pass
 
     def _build_ui(self):
         main = ttk.Frame(self, padding=16)
@@ -583,6 +607,26 @@ class App(tk.Tk):
         self.graph_options_frame.pack(fill="x", pady=(0, 10))
 
     def _action_section(self, parent):
+        presets = ttk.Frame(parent)
+        presets.pack(fill="x", pady=(0, 6))
+        ttk.Label(presets, text="Preset:", style="Hint.TLabel").pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(
+            presets, text="Teste rápido", command=self._apply_preset_quick, width=14
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            presets, text="Completo", command=self._apply_preset_full, width=12
+        ).pack(side="left")
+
+        ttk.Label(
+            parent,
+            textvariable=self.estimate_var,
+            style="Hint.TLabel",
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(0, 8))
 
@@ -593,6 +637,15 @@ class App(tk.Tk):
             command=self._start,
         )
         self.run_button.pack(side="left")
+
+        self.stop_button = ttk.Button(
+            frame,
+            text="Parar",
+            command=self._cancel_run,
+            state="disabled",
+            width=8,
+        )
+        self.stop_button.pack(side="left", padx=(8, 0))
 
         progress_frame = ttk.Frame(frame)
         progress_frame.pack(side="right", fill="x", expand=True, padx=(12, 0))
@@ -620,6 +673,30 @@ class App(tk.Tk):
             justify="left",
         ).pack(anchor="w")
 
+        tools = ttk.Frame(parent)
+        tools.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            tools, text="Exportar relatório HTML", command=self._export_report
+        ).pack(side="left")
+        ttk.Button(
+            tools, text="Comparar duas pastas", command=self._compare_folders
+        ).pack(side="left", padx=(8, 0))
+
+        # Atualiza estimativa quando parâmetros relevantes mudam
+        for var in (
+            self.runtime_var,
+            self.ramp_time_var,
+            self.iodepths_var,
+            self.numjobs_fixed_var,
+            self.numjobs_list_var,
+            self.generate_all_var,
+            self.graph_var,
+        ):
+            try:
+                var.trace_add("write", lambda *_: self._refresh_time_estimate())
+            except tk.TclError:
+                pass
+
     def _build_result_panel(self, parent):
         frame = ttk.LabelFrame(parent, text="Resultado", padding=12)
         frame.pack(fill="both", expand=True)
@@ -641,13 +718,24 @@ class App(tk.Tk):
             justify="left",
         ).pack(anchor="w", pady=(8, 0))
 
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(anchor="w", pady=(8, 0), fill="x")
+
         self.open_folder_button = ttk.Button(
-            frame,
+            btn_row,
             text="Abrir pasta do resultado",
             command=self._open_result_folder,
             state="disabled",
         )
-        self.open_folder_button.pack(anchor="w", pady=(8, 0))
+        self.open_folder_button.pack(side="left")
+
+        self.export_button = ttk.Button(
+            btn_row,
+            text="Exportar HTML",
+            command=self._export_report,
+            state="disabled",
+        )
+        self.export_button.pack(side="left", padx=(8, 0))
 
     def _on_generate_all_toggled(self):
         generate_all = self.generate_all_var.get()
@@ -788,6 +876,7 @@ class App(tk.Tk):
         )
         if folder:
             self.target_var.set(folder)
+            self._persist_paths()
 
     def _choose_results_root(self):
         initial = self.results_root_var.get().strip() or str(DEFAULT_RESULTS_ROOT)
@@ -802,6 +891,98 @@ class App(tk.Tk):
         )
         if folder:
             self.results_root_var.set(folder)
+            self._persist_paths()
+
+    def _persist_paths(self):
+        save_settings(
+            {
+                "target_root": self.target_var.get().strip(),
+                "results_root": self.results_root_var.get().strip(),
+                "dark_mode": bool(self.dark_mode),
+                "last_session": str(self._last_session_dir or ""),
+            }
+        )
+
+    def _on_close(self):
+        self._persist_paths()
+        if self.running:
+            self._cancel_run()
+        self.destroy()
+
+    def _apply_preset_quick(self):
+        self.runtime_var.set("10")
+        self.ramp_time_var.set("2")
+        self.size_mb_var.set("512")
+        self.iodepths_var.set("1 4 16")
+        self.numjobs_fixed_var.set("1")
+        self.numjobs_list_var.set("1 4")
+        self.generate_all_var.set(False)
+        self._on_generate_all_toggled()
+        self.status_var.set("Preset «Teste rápido» aplicado.")
+        self._refresh_time_estimate()
+
+    def _apply_preset_full(self):
+        self.runtime_var.set("30")
+        self.ramp_time_var.set("5")
+        self.size_mb_var.set("1024")
+        self.iodepths_var.set("1 2 4 8 16 32")
+        self.numjobs_fixed_var.set("1")
+        self.numjobs_list_var.set("1 2 4 8")
+        self.status_var.set("Preset «Completo» aplicado.")
+        self._refresh_time_estimate()
+
+    def _refresh_time_estimate(self, *_args):
+        try:
+            # Monta config parcial só para estimar (sem validar target)
+            graph = self.graph_var.get()
+            generate_all = bool(self.generate_all_var.get())
+            iodepths = self._int_list(self.iodepths_var.get(), "IODepth")
+            if generate_all or "numjobs_list" in GRAPH_FIELDS.get(graph, ()):
+                numjobs = self._int_list(self.numjobs_list_var.get(), "NumJobs")
+            else:
+                numjobs = [
+                    self._positive_int(self.numjobs_fixed_var.get(), "NumJobs")
+                ]
+            runtime = self._positive_int(self.runtime_var.get(), "Runtime")
+            ramp = self._positive_int(
+                self.ramp_time_var.get(), "Ramp time", allow_zero=True
+            )
+            cfg = {
+                "iodepths": iodepths,
+                "numjobs": numjobs,
+                "runtime": runtime,
+                "ramp_time": ramp,
+                "loops": 1,
+            }
+            runner = BenchmarkRunner(cfg)
+            jobs = runner.expected_job_count()
+            seconds = runner.estimated_seconds()
+            graphs = len(GRAPHS) if generate_all else 1
+            # ~3s por gráfico de overhead grosseiro
+            seconds += graphs * 3
+            mins, secs = divmod(int(seconds), 60)
+            if mins:
+                human = f"~{mins} min {secs:02d} s"
+            else:
+                human = f"~{secs} s"
+            self.estimate_var.set(
+                f"Estimativa: {human}  ·  {jobs} job(s) FIO + {graphs} gráfico(s)"
+            )
+        except Exception:
+            self.estimate_var.set("Estimativa: configure os parâmetros do teste.")
+
+    def _cancel_run(self):
+        if not self.running:
+            return
+        self.cancel_event.set()
+        self.status_var.set("Cancelando… encerrando o FIO.")
+        try:
+            from bench_compat import kill_running_fio
+
+            kill_running_fio()
+        except Exception:
+            pass
+        self.stop_button.configure(state="disabled")
 
     @staticmethod
     def _positive_int(value, field, allow_zero=False):
@@ -954,15 +1135,20 @@ class App(tk.Tk):
         self.progress_max = num_jobs + num_graphs
         self.progress_value = 0
         self._bench_jobs_total = num_jobs
+        self._last_config = dict(config)
 
+        self.cancel_event.clear()
         self.running = True
         self.run_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.open_folder_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
         self._set_progress(
             0,
             self.progress_max,
             f"Iniciando… {num_jobs} job(s) de benchmark + {num_graphs} gráfico(s).",
         )
+        self._persist_paths()
 
         thread = threading.Thread(
             target=self._worker,
@@ -986,14 +1172,21 @@ class App(tk.Tk):
             )
 
             def bench_progress(done, job_total, message):
-                # done = jobs concluídos (1..bench_total)
+                if self.cancel_event.is_set():
+                    raise BenchmarkError("Benchmark cancelado pelo usuário.")
                 self.after(
                     0,
                     lambda d=done, m=message: self._set_progress(d, total, m),
                 )
 
             benchmark = BenchmarkRunner(config)
-            benchmark_result = benchmark.run(progress_callback=bench_progress)
+            benchmark_result = benchmark.run(
+                progress_callback=bench_progress,
+                cancel_event=self.cancel_event,
+            )
+
+            if self.cancel_event.is_set():
+                raise BenchmarkError("Benchmark cancelado pelo usuário.")
 
             self.after(
                 0,
@@ -1005,7 +1198,8 @@ class App(tk.Tk):
             )
 
             def plot_progress(step, graph_total, message):
-                # step 1..N dos gráficos → progresso global = bench_total + step
+                if self.cancel_event.is_set():
+                    raise PlotError("Geração de gráficos cancelada pelo usuário.")
                 self.after(
                     0,
                     lambda s=step, m=message: self._set_progress(
@@ -1027,20 +1221,24 @@ class App(tk.Tk):
             self.after(0, self._finish_success, png_paths)
         except (BenchmarkError, PlotError, OSError) as exc:
             message = str(exc)
-            self.after(0, self._finish_error, message)
+            cancelled = self.cancel_event.is_set() or "cancelado" in message.lower()
+            self.after(0, self._finish_error, message, cancelled)
         except Exception as exc:
             message = "Ocorreu um erro inesperado:\n" + str(exc)
-            self.after(0, self._finish_error, message)
+            self.after(0, self._finish_error, message, False)
 
     def _finish_success(self, png_paths):
         self.running = False
         self.run_button.configure(state="normal")
+        self.stop_button.configure(state="disabled")
         self.status_var.set("Concluído.")
         self.progress_label_var.set("100%")
         self.progress.configure(value=100)
 
         primary = Path(png_paths[0]) if png_paths else None
+        self._last_png_paths = [Path(p) for p in png_paths]
         if primary is not None:
+            self._last_session_dir = primary.parent
             if len(png_paths) == 1:
                 self.result_path_var.set(f"Gráfico: {primary}")
                 msg = "O benchmark terminou e o gráfico foi gerado."
@@ -1053,21 +1251,29 @@ class App(tk.Tk):
                     f"foram gerados.\n\nPasta:\n{primary.parent}"
                 )
             self.open_folder_button.configure(state="normal")
+            self.export_button.configure(state="normal")
             self._show_image(primary)
+            self._persist_paths()
         else:
             self.result_path_var.set("")
             self.open_folder_button.configure(state="disabled")
+            self.export_button.configure(state="disabled")
             msg = "O benchmark terminou."
 
         messagebox.showinfo("Concluído", msg)
 
-    def _finish_error(self, message):
+    def _finish_error(self, message, cancelled=False):
         self.running = False
         self.run_button.configure(state="normal")
-        self.status_var.set("Falha.")
+        self.stop_button.configure(state="disabled")
         self.progress_label_var.set("")
         self.progress.configure(value=0)
-        messagebox.showerror("Erro", message)
+        if cancelled:
+            self.status_var.set("Cancelado.")
+            messagebox.showinfo("Cancelado", message)
+        else:
+            self.status_var.set("Falha.")
+            messagebox.showerror("Erro", message)
 
     def _show_image(self, path):
         try:
@@ -1146,6 +1352,151 @@ class App(tk.Tk):
     def _toggle_fullscreen(self, event=None):
         current = bool(self.attributes("-fullscreen"))
         self.attributes("-fullscreen", not current)
+
+    def _resolve_session_dir(self) -> Path | None:
+        if self._last_session_dir and Path(self._last_session_dir).is_dir():
+            return Path(self._last_session_dir)
+        path_text = self.result_path_var.get().strip()
+        if not path_text:
+            return None
+        if path_text.startswith("Gráfico: "):
+            return Path(path_text.removeprefix("Gráfico: ").strip()).parent
+        if " gráficos em: " in path_text:
+            return Path(path_text.split(" gráficos em: ", 1)[-1].strip())
+        p = Path(path_text)
+        return p.parent if p.is_file() else p
+
+    def _export_report(self):
+        session = self._resolve_session_dir()
+        if session is None or not session.is_dir():
+            folder = filedialog.askdirectory(
+                title="Escolha a pasta da sessão para exportar o relatório"
+            )
+            if not folder:
+                return
+            session = Path(folder)
+
+        default_name = session / "relatorio.html"
+        dest = filedialog.asksaveasfilename(
+            title="Salvar relatório HTML",
+            defaultextension=".html",
+            initialfile=default_name.name,
+            initialdir=str(session),
+            filetypes=[("HTML", "*.html"), ("Todos", "*.*")],
+        )
+        if not dest:
+            return
+
+        try:
+            out = export_html_report(
+                session,
+                output_path=Path(dest),
+                config=self._last_config,
+                title=self.title_var.get().strip() or "Relatório FIO Benchmark",
+            )
+            messagebox.showinfo(
+                "Relatório exportado",
+                f"Relatório salvo em:\n{out}",
+            )
+            try:
+                if os.name == "nt":
+                    os.startfile(out)
+                elif os.uname().sysname == "Darwin":
+                    import subprocess
+                    subprocess.Popen(["open", str(out)])
+                else:
+                    import subprocess
+                    subprocess.Popen(["xdg-open", str(out)])
+            except OSError:
+                pass
+        except OSError as exc:
+            messagebox.showerror("Erro ao exportar", str(exc))
+
+    def _compare_folders(self):
+        folder_a = filedialog.askdirectory(title="Pasta A (resultado 1)")
+        if not folder_a:
+            return
+        folder_b = filedialog.askdirectory(title="Pasta B (resultado 2)")
+        if not folder_b:
+            return
+
+        path_a = Path(folder_a)
+        path_b = Path(folder_b)
+        pngs_a = sorted(path_a.glob("*.png"))
+        pngs_b = sorted(path_b.glob("*.png"))
+
+        if not pngs_a and not pngs_b:
+            messagebox.showerror(
+                "Sem gráficos",
+                "Nenhuma das pastas contém arquivos PNG.",
+            )
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Comparar resultados")
+        win.geometry("1100x700")
+        win.minsize(800, 500)
+
+        paned = ttk.Panedwindow(win, orient="horizontal")
+        paned.pack(fill="both", expand=True, padx=8, pady=8)
+
+        left = ttk.LabelFrame(paned, text=f"A — {path_a.name}", padding=8)
+        right = ttk.LabelFrame(paned, text=f"B — {path_b.name}", padding=8)
+        paned.add(left, weight=1)
+        paned.add(right, weight=1)
+
+        def fill_side(parent, pngs, side_name):
+            if not pngs:
+                ttk.Label(parent, text="Sem PNG nesta pasta.").pack(expand=True)
+                return None
+            var = tk.StringVar(value=pngs[0].name)
+            names = [p.name for p in pngs]
+            combo = ttk.Combobox(
+                parent, textvariable=var, values=names, state="readonly"
+            )
+            combo.pack(fill="x", pady=(0, 6))
+            label = ttk.Label(parent, anchor="center")
+            label.pack(fill="both", expand=True)
+            cache = {"photo": None, "source": None}
+
+            def show(*_):
+                name = var.get()
+                match = next((p for p in pngs if p.name == name), None)
+                if match is None:
+                    return
+                try:
+                    with Image.open(match) as img:
+                        cache["source"] = img.convert("RGBA").copy()
+                    w = max(label.winfo_width(), 200)
+                    h = max(label.winfo_height(), 200)
+                    src = cache["source"]
+                    scale = min(w / src.width, h / src.height, 1.0)
+                    nw = max(1, int(src.width * scale))
+                    nh = max(1, int(src.height * scale))
+                    resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
+                    buf = io.BytesIO()
+                    resized.save(buf, format="PNG")
+                    cache["photo"] = tk.PhotoImage(
+                        data=base64.b64encode(buf.getvalue()).decode("ascii")
+                    )
+                    label.configure(image=cache["photo"], text="")
+                except Exception as exc:
+                    label.configure(image="", text=f"Erro: {exc}")
+
+            combo.bind("<<ComboboxSelected>>", show)
+            label.bind("<Configure>", lambda e: show())
+            parent.after(80, show)
+            return cache
+
+        fill_side(left, pngs_a, "A")
+        fill_side(right, pngs_b, "B")
+
+        ttk.Label(
+            win,
+            text=f"{path_a}\n{path_b}",
+            style="Hint.TLabel",
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
     def _open_result_folder(self):
         path_text = self.result_path_var.get().strip()
