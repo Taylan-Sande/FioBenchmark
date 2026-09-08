@@ -82,20 +82,43 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "== Gerando aplicação PyInstaller =="
 python -m PyInstaller build\fio_benchmark.spec --noconfirm --clean
 
+if ($LASTEXITCODE -ne 0) {
+    throw "O PyInstaller terminou com erro."
+}
+
 $BundleExe = Join-Path $ProjectRoot "dist\FioBenchmark\FioBenchmark.exe"
 if (-not (Test-Path $BundleExe)) {
     throw "O executável PyInstaller não foi criado."
 }
 
 Write-Host "== Testando bundle Windows =="
+
 $BundleReport = Join-Path $ProjectRoot "build\windows-selftest.txt"
-& $BundleExe --self-test $BundleReport
-if ($LASTEXITCODE -ne 0) {
+Remove-Item $BundleReport -Force -ErrorAction SilentlyContinue
+
+$BundleTest = Start-Process `
+    -FilePath $BundleExe `
+    -ArgumentList @(
+        "--self-test",
+        "`"$BundleReport`""
+    ) `
+    -Wait `
+    -PassThru
+
+if ($BundleTest.ExitCode -ne 0) {
     if (Test-Path $BundleReport) {
         Get-Content $BundleReport
     }
-    throw "O bundle Windows falhou no self-test."
+    throw "O bundle Windows falhou no self-test. Código: $($BundleTest.ExitCode)"
 }
+
+if (-not (Test-Path $BundleReport)) {
+    throw (
+        "O bundle Windows terminou o self-test sem criar o relatório: " +
+        $BundleReport
+    )
+}
+
 Get-Content $BundleReport
 
 $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -113,12 +136,17 @@ if (-not (Test-Path $Iscc)) {
 Write-Host "== Criando instalador Windows =="
 & $Iscc "build\windows_installer.iss"
 
+if ($LASTEXITCODE -ne 0) {
+    throw "O Inno Setup terminou com erro."
+}
+
 $Installer = Join-Path $ProjectRoot "release\FioBenchmark-Setup-Windows-x64.exe"
 if (-not (Test-Path $Installer)) {
     throw "O instalador Windows não foi criado."
 }
 
 Write-Host "== Instalando silenciosamente para testar o instalador final =="
+
 $TestInstallDir = Join-Path $ProjectRoot "build\_installed_test"
 Remove-Item $TestInstallDir -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -142,14 +170,35 @@ if (-not (Test-Path $InstalledExe)) {
     throw "FioBenchmark.exe não foi encontrado após a instalação de teste."
 }
 
-$InstalledReport = Join-Path $ProjectRoot "build\windows-installed-selftest.txt"
-& $InstalledExe --self-test $InstalledReport
+Write-Host "== Testando aplicação já instalada =="
 
-if ($LASTEXITCODE -ne 0) {
+$InstalledReport = Join-Path $ProjectRoot "build\windows-installed-selftest.txt"
+Remove-Item $InstalledReport -Force -ErrorAction SilentlyContinue
+
+$InstalledTest = Start-Process `
+    -FilePath $InstalledExe `
+    -ArgumentList @(
+        "--self-test",
+        "`"$InstalledReport`""
+    ) `
+    -Wait `
+    -PassThru
+
+if ($InstalledTest.ExitCode -ne 0) {
     if (Test-Path $InstalledReport) {
         Get-Content $InstalledReport
     }
-    throw "A aplicação instalada falhou no self-test."
+    throw (
+        "A aplicação instalada falhou no self-test. " +
+        "Código: $($InstalledTest.ExitCode)"
+    )
+}
+
+if (-not (Test-Path $InstalledReport)) {
+    throw (
+        "A aplicação instalada terminou o self-test sem criar o relatório: " +
+        $InstalledReport
+    )
 }
 
 Get-Content $InstalledReport
